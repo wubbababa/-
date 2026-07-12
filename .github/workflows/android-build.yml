@@ -35,6 +35,16 @@ jobs:
     - name: Grant execute permission for gradlew
       run: chmod +x gradlew
 
+    - name: Restore or Generate Debug Keystore
+      run: |
+        if [ -f debug.keystore.base64 ]; then
+          echo "Decoding debug.keystore from debug.keystore.base64..."
+          tr -d '\r\n' < debug.keystore.base64 | base64 -d > debug.keystore
+        else
+          echo "debug.keystore.base64 not found. Generating a temporary debug.keystore..."
+          keytool -genkey -v -keystore debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
+        fi
+
     - name: Build Debug APK with Gradle
       run: ./gradlew :app:assembleDebug
 
