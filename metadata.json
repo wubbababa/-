@@ -1,0 +1,6 @@
+{
+  "name": "又玩手机",
+  "description": "一个用于戒掉手机依赖的工具。当用户解锁手机并使用达到一分钟后，系统将强制弹出‘又玩手机’警告框，提醒用户放下设备、回归生活。",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

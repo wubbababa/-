@@ -1,0 +1,32 @@
+<resources>
+    <string name="app_name">又玩手机</string>
+    <string name="service_running_desc">已开启后台监测，将在使用达到 %1$d 秒后提醒。</string>
+    <string name="warning_title">又玩手机了！</string>
+    <string name="warning_desc">您已经连续玩手机一分钟了，请立即放下手机，休息一下！</string>
+    
+    <string name="service_status_active">监测保护中</string>
+    <string name="service_status_inactive">守护已暂停</string>
+    <string name="btn_start">开启守护服务</string>
+    <string name="btn_stop">停止守护服务</string>
+    
+    <string name="setting_title">守护时间规则</string>
+    <string name="stats_title">数据看板</string>
+    <string name="stats_unlocks">解锁次数</string>
+    <string name="stats_warnings">警告次数</string>
+    <string name="stats_avg_time">平均使用</string>
+    
+    <string name="stats_history_title">守护历史轨迹</string>
+    <string name="history_empty">暂无数据。开启服务，锁屏再解锁即可记录！</string>
+    <string name="btn_clear_history">清除历史</string>
+    
+    <string name="permission_title">守护运行所需权限</string>
+    <string name="permission_notification_desc">1. 通知权限：用于在通知栏保持守护，并用于在到达时间时发出高优先级强提醒。</string>
+    <string name="permission_overlay_desc">2. 悬浮窗权限（显示在其他应用上）：由于系统限制，从后台直接弹窗必须要悬浮窗权限支持。开启后，玩手机一分钟时将会在您眼前立刻弹出“又玩手机”全屏大警告（极其管用！）。</string>
+    <string name="btn_grant">前往开启</string>
+    <string name="btn_granted">已获权限</string>
+    
+    <string name="warning_main_header">又玩手机！</string>
+    <string name="warning_sub_header">放下设备，立地成佛。闭上眼睛，深呼吸，给生活一些留白。</string>
+    <string name="warning_exit_countdown">我认错了 (%1$d秒)</string>
+    <string name="warning_exit_active">我认错了，放下设备</string>
+</resources>
