@@ -188,6 +188,10 @@ class DetoxService : Service() {
                     currentCountdown.value -= 1
                     if (currentCountdown.value == 0) {
                         triggerWarning()
+                        // Keep reminding at the configured interval for as long as
+                        // this unlock session continues. Locking the screen cancels
+                        // this job; the next unlock starts a fresh full interval.
+                        currentCountdown.value = selectedDelaySeconds.value
                     }
                 }
             }
