@@ -45,7 +45,9 @@ class DetoxService : Service() {
     companion object {
         private const val TAG = "DetoxService"
         private const val NOTIFICATION_CHANNEL_ID = "detox_service_channel"
+        private const val WARNING_CHANNEL_ID = "detox_warning_channel"
         private const val NOTIFICATION_ID = 8888
+        private const val WARNING_NOTIFICATION_ID = 9999
 
         // Live status flows for real-time UI synchronization
         val isServiceRunning = MutableStateFlow(false)
@@ -253,14 +255,20 @@ class DetoxService : Service() {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
         }
 
+        // Always post the high-priority full-screen notification. It is the reliable
+        // fallback when Android or an OEM blocks background activity launches.
+        showHighPriorityWarningNotification(warningIntent)
+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && Settings.canDrawOverlays(this)) {
             // Can draw over other apps -> launch activity directly!
             Log.d(TAG, "Has overlay permission, launching WarningActivity directly")
-            startActivity(warningIntent)
+            try {
+                startActivity(warningIntent)
+            } catch (e: Exception) {
+                Log.e(TAG, "Direct warning activity launch failed", e)
+            }
         } else {
-            // Cannot draw over other apps, send high priority heads-up notification that acts as fullScreenIntent!
-            Log.d(TAG, "No overlay permission, triggering fullscreen notification warning")
-            showHighPriorityWarningNotification(warningIntent)
+            Log.d(TAG, "No overlay permission; using fullscreen notification warning")
         }
     }
 
@@ -292,7 +300,7 @@ class DetoxService : Service() {
         }
         val pendingIntent = PendingIntent.getActivity(this, 1001, intent, pendingIntentFlags)
 
-        val warningNotification = NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
+        val warningNotification = NotificationCompat.Builder(this, WARNING_CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_launcher_foreground) // fallback
             .setContentTitle(getString(R.string.warning_title))
             .setContentText(getString(R.string.warning_desc))
@@ -301,10 +309,11 @@ class DetoxService : Service() {
             .setDefaults(Notification.DEFAULT_ALL)
             .setAutoCancel(true)
             .setFullScreenIntent(pendingIntent, true)
+            .setTimeoutAfter(30_000)
             .build()
 
         val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        notificationManager.notify(9999, warningNotification)
+        notificationManager.notify(WARNING_NOTIFICATION_ID, warningNotification)
     }
 
     private fun createNotificationChannel() {
@@ -318,6 +327,17 @@ class DetoxService : Service() {
             }
             val manager = getSystemService(NotificationManager::class.java)
             manager.createNotificationChannel(serviceChannel)
+
+            val warningChannel = NotificationChannel(
+                WARNING_CHANNEL_ID,
+                "强制提醒",
+                NotificationManager.IMPORTANCE_HIGH
+            ).apply {
+                description = "到达设定使用时长时显示全屏提醒。"
+                enableVibration(true)
+                lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+            }
+            manager.createNotificationChannel(warningChannel)
         }
     }
 
