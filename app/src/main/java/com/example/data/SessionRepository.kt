@@ -17,6 +17,10 @@ class SessionRepository(private val dao: UsageSessionDao) {
         return dao.getLatestSession()
     }
 
+    suspend fun getSessionById(id: Int): UsageSession? {
+        return dao.getSessionById(id)
+    }
+
     suspend fun deleteAllSessions() {
         dao.deleteAllSessions()
     }

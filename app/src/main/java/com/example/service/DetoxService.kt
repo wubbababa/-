@@ -2,6 +2,7 @@ package com.example.service
 
 import android.app.Notification
 import android.app.NotificationChannel
+import android.app.KeyguardManager
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
@@ -12,6 +13,7 @@ import android.content.IntentFilter
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
+import android.os.SystemClock
 import android.os.Vibrator
 import android.os.VibratorManager
 import android.os.VibrationEffect
@@ -40,7 +42,12 @@ class DetoxService : Service() {
 
     private lateinit var repository: SessionRepository
     private var currentSessionId: Long = 0L
+    private var currentSessionGeneration = 0L
+    private val pendingSessionEndTimes = mutableMapOf<Long, Long>()
     private var screenReceiver: BroadcastReceiver? = null
+    private var sessionStartedAtElapsedRealtime = 0L
+    private var warningScheduleAnchorElapsedRealtime = 0L
+    private var nextWarningAtElapsedRealtime = 0L
 
     companion object {
         private const val TAG = "DetoxService"
@@ -79,7 +86,8 @@ class DetoxService : Service() {
         }
         
         isScreenInteractive.value = isScreenOnNow
-        if (isScreenOnNow) {
+        val keyguardManager = getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
+        if (isScreenOnNow && !keyguardManager.isKeyguardLocked) {
             startTrackingSession()
         }
     }
@@ -94,6 +102,9 @@ class DetoxService : Service() {
                 // If counting down, reset countdown to new delay
                 if (timerJob?.isActive == true) {
                     currentCountdown.value = newDelay
+                    val now = SystemClock.elapsedRealtime()
+                    warningScheduleAnchorElapsedRealtime = now
+                    nextWarningAtElapsedRealtime = now + newDelay * 1_000L
                 }
                 updateForegroundNotification(getString(R.string.service_running_desc, newDelay))
             }
@@ -129,9 +140,14 @@ class DetoxService : Service() {
                     Intent.ACTION_SCREEN_ON -> {
                         Log.d(TAG, "Screen on received")
                         isScreenInteractive.value = true
-                        // Start temporary countdown just in case user has no secure lockscreen.
-                        // ACTION_USER_PRESENT will override this if it fires next.
-                        startTrackingSession()
+                        // Devices without a secure lock screen may not send
+                        // ACTION_USER_PRESENT. Start only when the keyguard is
+                        // already gone; otherwise wait for the unlock broadcast.
+                        val keyguardManager =
+                            getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
+                        if (!keyguardManager.isKeyguardLocked) {
+                            startTrackingSession()
+                        }
                     }
                     Intent.ACTION_USER_PRESENT -> {
                         Log.d(TAG, "User present (unlocked) received")
@@ -157,11 +173,21 @@ class DetoxService : Service() {
     }
 
     private fun startTrackingSession() {
-        // Cancel any existing timer
-        timerJob?.cancel()
+        // SCREEN_ON and USER_PRESENT can both arrive for one unlock. Do not
+        // restart the timer or insert a second database session.
+        if (timerJob?.isActive == true) {
+            return
+        }
+
         activeSessionSeconds.value = 0L
 
         val unlockTime = System.currentTimeMillis()
+        val sessionGeneration = ++currentSessionGeneration
+        val startedAtElapsedRealtime = SystemClock.elapsedRealtime()
+        sessionStartedAtElapsedRealtime = startedAtElapsedRealtime
+        warningScheduleAnchorElapsedRealtime = startedAtElapsedRealtime
+        nextWarningAtElapsedRealtime =
+            startedAtElapsedRealtime + selectedDelaySeconds.value * 1_000L
         currentCountdown.value = selectedDelaySeconds.value
 
         // Record session start to database
@@ -173,8 +199,27 @@ class DetoxService : Service() {
                     durationSeconds = 0,
                     warned = false
                 )
-                currentSessionId = repository.insertSession(session)
-                Log.d(TAG, "Inserted session: $currentSessionId")
+                val insertedSessionId = repository.insertSession(session)
+                if (
+                    currentSessionGeneration == sessionGeneration &&
+                    timerJob?.isActive == true
+                ) {
+                    currentSessionId = insertedSessionId
+                    Log.d(TAG, "Inserted session: $currentSessionId")
+                } else {
+                    // The screen was locked before Room returned. Close this
+                    // late insert instead of leaving an orphan active session.
+                    val endTime = pendingSessionEndTimes.remove(sessionGeneration)
+                        ?: System.currentTimeMillis()
+                    repository.updateSession(
+                        session.copy(
+                            id = insertedSessionId.toInt(),
+                            lockTime = endTime,
+                            durationSeconds =
+                                ((endTime - unlockTime).coerceAtLeast(0L)) / 1_000L
+                        )
+                    )
+                }
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to insert session", e)
             }
@@ -183,19 +228,29 @@ class DetoxService : Service() {
         // Start countdown timer and active duration tracker
         timerJob = serviceScope.launch {
             while (true) {
-                delay(1000)
-                activeSessionSeconds.value += 1
-                
-                if (currentCountdown.value > 0) {
-                    currentCountdown.value -= 1
-                    if (currentCountdown.value == 0) {
-                        triggerWarning()
-                        // Keep reminding at the configured interval for as long as
-                        // this unlock session continues. Locking the screen cancels
-                        // this job; the next unlock starts a fresh full interval.
-                        currentCountdown.value = selectedDelaySeconds.value
-                    }
+                val now = SystemClock.elapsedRealtime()
+                activeSessionSeconds.value =
+                    ((now - sessionStartedAtElapsedRealtime).coerceAtLeast(0L)) / 1_000L
+
+                if (now >= nextWarningAtElapsedRealtime) {
+                    triggerWarning()
+
+                    // Stay aligned to real elapsed time from the unlock/configuration
+                    // anchor. If Android delayed this coroutine, skip missed slots
+                    // instead of drifting or showing several alerts at once.
+                    val intervalMillis = selectedDelaySeconds.value * 1_000L
+                    val elapsedFromAnchor =
+                        (now - warningScheduleAnchorElapsedRealtime).coerceAtLeast(0L)
+                    val nextInterval = elapsedFromAnchor / intervalMillis + 1L
+                    nextWarningAtElapsedRealtime =
+                        warningScheduleAnchorElapsedRealtime + nextInterval * intervalMillis
                 }
+
+                val remainingMillis =
+                    (nextWarningAtElapsedRealtime - now).coerceAtLeast(0L)
+                currentCountdown.value =
+                    ((remainingMillis + 999L) / 1_000L).toInt()
+                delay(remainingMillis.coerceIn(1L, 1_000L))
             }
         }
     }
@@ -204,16 +259,29 @@ class DetoxService : Service() {
         timerJob?.cancel()
         timerJob = null
 
+        if (saveSession && currentSessionId == 0L && sessionStartedAtElapsedRealtime > 0L) {
+            pendingSessionEndTimes[currentSessionGeneration] = System.currentTimeMillis()
+        }
+
         if (saveSession && currentSessionId != 0L) {
             val sessionId = currentSessionId
-            val activeSeconds = activeSessionSeconds.value
+            val activeSeconds = if (sessionStartedAtElapsedRealtime > 0L) {
+                (SystemClock.elapsedRealtime() - sessionStartedAtElapsedRealtime)
+                    .coerceAtLeast(0L) / 1_000L
+            } else {
+                activeSessionSeconds.value
+            }
             serviceScope.launch(Dispatchers.IO) {
                 try {
-                    val latest = repository.getLatestSession()
-                    if (latest != null && latest.id == sessionId.toInt()) {
+                    val session = repository.getSessionById(sessionId.toInt())
+                    if (session != null) {
                         val lockTime = System.currentTimeMillis()
-                        val duration = if (activeSeconds > 0) activeSeconds else (lockTime - latest.unlockTime) / 1000
-                        val updated = latest.copy(
+                        val duration = if (activeSeconds > 0) {
+                            activeSeconds
+                        } else {
+                            (lockTime - session.unlockTime) / 1_000L
+                        }
+                        val updated = session.copy(
                             lockTime = lockTime,
                             durationSeconds = duration
                         )
@@ -226,6 +294,9 @@ class DetoxService : Service() {
             }
         }
         currentSessionId = 0L
+        sessionStartedAtElapsedRealtime = 0L
+        warningScheduleAnchorElapsedRealtime = 0L
+        nextWarningAtElapsedRealtime = 0L
     }
 
     private fun triggerWarning() {
@@ -236,9 +307,9 @@ class DetoxService : Service() {
             val sessionId = currentSessionId
             serviceScope.launch(Dispatchers.IO) {
                 try {
-                    val latest = repository.getLatestSession()
-                    if (latest != null && latest.id == sessionId.toInt()) {
-                        repository.updateSession(latest.copy(warned = true))
+                    val session = repository.getSessionById(sessionId.toInt())
+                    if (session != null) {
+                        repository.updateSession(session.copy(warned = true))
                     }
                 } catch (e: Exception) {
                     Log.e(TAG, "Failed to update warning status in DB", e)

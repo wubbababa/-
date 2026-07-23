@@ -1,6 +1,7 @@
 package com.example
 
 import android.Manifest
+import android.app.NotificationManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -130,6 +131,7 @@ fun MainScreen(viewModel: MainViewModel) {
     // Permissions Local State
     var hasNotificationPermission by remember { mutableStateOf(true) }
     var hasOverlayPermission by remember { mutableStateOf(true) }
+    var hasFullScreenPermission by remember { mutableStateOf(true) }
 
     // Helper to refresh permission statuses
     fun checkPermissions() {
@@ -140,6 +142,12 @@ fun MainScreen(viewModel: MainViewModel) {
         }
         hasOverlayPermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             Settings.canDrawOverlays(context)
+        } else {
+            true
+        }
+        hasFullScreenPermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            val notificationManager = context.getSystemService(NotificationManager::class.java)
+            notificationManager.canUseFullScreenIntent()
         } else {
             true
         }
@@ -155,6 +163,16 @@ fun MainScreen(viewModel: MainViewModel) {
         contract = ActivityResultContracts.RequestPermission()
     ) { isGranted ->
         hasNotificationPermission = isGranted
+    }
+    val fullScreenSettingsLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) {
+        checkPermissions()
+    }
+    val overlaySettingsLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) {
+        checkPermissions()
     }
 
     Scaffold(
@@ -254,11 +272,12 @@ fun MainScreen(viewModel: MainViewModel) {
             }
 
             // 5. Permission Alert Card (Only displays when missing crucial permissions)
-            if (!hasNotificationPermission || !hasOverlayPermission) {
+            if (!hasNotificationPermission || !hasOverlayPermission || !hasFullScreenPermission) {
                 item {
                     MinimalPermissionCard(
                         hasNotification = hasNotificationPermission,
                         hasOverlay = hasOverlayPermission,
+                        hasFullScreen = hasFullScreenPermission,
                         onRequestNotification = {
                             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                                 notificationLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
@@ -270,7 +289,18 @@ fun MainScreen(viewModel: MainViewModel) {
                                     Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
                                     Uri.parse("package:${context.packageName}")
                                 )
-                                context.startActivity(intent)
+                                overlaySettingsLauncher.launch(intent)
+                            }
+                        },
+                        onRequestFullScreen = {
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                                val intent = Intent(
+                                    Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT,
+                                    Uri.parse("package:${context.packageName}")
+                                )
+                                if (intent.resolveActivity(context.packageManager) != null) {
+                                    fullScreenSettingsLauncher.launch(intent)
+                                }
                             }
                         },
                         onRefresh = { checkPermissions() }
@@ -721,8 +751,10 @@ fun MinimalStatsGrid(
 fun MinimalPermissionCard(
     hasNotification: Boolean,
     hasOverlay: Boolean,
+    hasFullScreen: Boolean,
     onRequestNotification: () -> Unit,
     onRequestOverlay: () -> Unit,
+    onRequestFullScreen: () -> Unit,
     onRefresh: () -> Unit
 ) {
     Card(
@@ -785,6 +817,18 @@ fun MinimalPermissionCard(
                 onGrant = onRequestOverlay,
                 tag = "overlay_perm_btn"
             )
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                Spacer(modifier = Modifier.height(16.dp))
+
+                MinimalPermissionRow(
+                    title = "全屏提醒权限",
+                    desc = "允许应用在使用其他应用时显示全屏提醒。",
+                    isGranted = hasFullScreen,
+                    onGrant = onRequestFullScreen,
+                    tag = "fullscreen_perm_btn"
+                )
+            }
         }
     }
 }

@@ -21,6 +21,9 @@ interface UsageSessionDao {
     @Query("SELECT * FROM usage_sessions ORDER BY unlockTime DESC LIMIT 1")
     suspend fun getLatestSession(): UsageSession?
 
+    @Query("SELECT * FROM usage_sessions WHERE id = :id LIMIT 1")
+    suspend fun getSessionById(id: Int): UsageSession?
+
     @Query("DELETE FROM usage_sessions")
     suspend fun deleteAllSessions()
 }
